@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Timesheet Clock</title>
+  <style>
+    :root { color-scheme: light; --ink: #19323a; --muted: #64747a; --teal: #287c7d; --line: #d9e1e5; --paper: #ffffff; --wash: #eef3f4; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; background: linear-gradient(145deg, #e7f0ef, #f7f8f4 60%, #e8eef2); color: var(--ink); font: 16px/1.4 "Segoe UI", Arial, sans-serif; }
+    main { width: min(100% - 28px, 520px); margin: 0 auto; padding: 28px 0 36px; }
+    .brand { letter-spacing: .12em; color: var(--teal); font-size: 12px; font-weight: 700; }
+    h1 { margin: 6px 0 4px; font-size: clamp(28px, 8vw, 42px); line-height: 1; }
+    .subtitle { margin: 0 0 22px; color: var(--muted); }
+    .panel { background: var(--paper); border: 1px solid var(--line); border-radius: 10px; padding: 18px; box-shadow: 0 10px 30px rgba(25, 50, 58, .08); }
+    label { display: block; margin: 14px 0 6px; font-weight: 700; font-size: 14px; }
+    label:first-child { margin-top: 0; }
+    select, input { width: 100%; min-height: 46px; border: 1px solid #b9c9cd; border-radius: 6px; padding: 9px 11px; background: #fff; color: var(--ink); font: inherit; }
+    .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 18px; }
+    button { min-height: 52px; border: 0; border-radius: 7px; padding: 12px 10px; color: white; background: var(--teal); font: 700 16px inherit; cursor: pointer; }
+    button.secondary { background: #42626a; }
+    button:disabled { opacity: .45; cursor: not-allowed; }
+    .status { min-height: 24px; margin-top: 16px; color: var(--muted); }
+    .status.error { color: #a12e2e; }
+    .status.success { color: #1b6d54; }
+    .open-shift { margin-top: 16px; padding: 12px; background: var(--wash); border-left: 4px solid var(--teal); border-radius: 4px; }
+    .settings { margin-top: 18px; border-top: 1px solid var(--line); padding-top: 14px; }
+    .settings summary { color: var(--muted); cursor: pointer; font-size: 14px; }
+    .small { color: var(--muted); font-size: 13px; }
+    @media (max-width: 380px) { .actions { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="brand">TIMESHEET DESK</div>
+    <h1>Clock in.</h1>
+    <p class="subtitle">Choose your name and funding source before starting your shift.</p>
+    <section class="panel" aria-label="Employee clock">
+      <label for="employee">Employee</label>
+      <select id="employee"><option value="">Loading employees...</option></select>
+      <label for="funding">Funding source</label>
+      <select id="funding"><option value="">Loading funding sources...</option></select>
+      <div class="actions">
+        <button id="clockIn">Clock in</button>
+        <button id="clockOut" class="secondary">Clock out</button>
+      </div>
+      <div id="status" class="status" role="status"></div>
+      <div id="openShift" class="open-shift" hidden></div>
+      <details class="settings">
+        <summary>Connection settings</summary>
+        <label for="apiUrl">API address</label>
+        <input id="apiUrl" inputmode="url" placeholder="https://your-api-address" autocomplete="url">
+        <p class="small">The API must be reachable by phone and allow this page's origin through CORS.</p>
+        <button id="saveApi" type="button">Save API address</button>
+      </details>
+    </section>
+  </main>
+  <script>
+    const apiInput = document.querySelector('#apiUrl');
+    const employeeSelect = document.querySelector('#employee');
+    const fundingSelect = document.querySelector('#funding');
+    const clockInButton = document.querySelector('#clockIn');
+    const clockOutButton = document.querySelector('#clockOut');
+    const saveApiButton = document.querySelector('#saveApi');
+    const status = document.querySelector('#status');
+    const openShift = document.querySelector('#openShift');
+    const queryApi = new URLSearchParams(location.search).get('api');
+    apiInput.value = queryApi || localStorage.getItem('timesheetApiUrl') || '';
+
+    function apiUrl() { return apiInput.value.trim().replace(/\/$/, ''); }
+    function setStatus(message, kind = '') { status.textContent = message; status.className = `status ${kind}`; }
+    async function request(path, options = {}) {
+      if (!apiUrl()) throw new Error('Enter the API address in Connection settings first.');
+      const response = await fetch(`${apiUrl()}${path}`, { headers: { 'Content-Type': 'application/json' }, ...options });
+      if (!response.ok) throw new Error(await response.text() || `Request failed (${response.status})`);
+      return response.json();
+    }
+    function selectedEmployeeId() { return employeeSelect.value; }
+    function showOpenShift(entry) {
+      if (!entry) { openShift.hidden = true; return; }
+      openShift.hidden = false;
+      openShift.textContent = `Open shift: ${new Date(entry.clockIn).toLocaleString()}`;
+    }
+    async function loadLookups() {
+      try {
+        const [employees, funding] = await Promise.all([request('/api/employees'), request('/api/funding-sources')]);
+        employeeSelect.innerHTML = '<option value="">Select your name</option>';
+        employees.forEach(employee => employeeSelect.add(new Option(employee.name, employee.id)));
+        fundingSelect.innerHTML = '<option value="">Select funding source</option>';
+        funding.forEach(source => fundingSelect.add(new Option(source.name, source.id)));
+        setStatus('Ready.', 'success');
+      } catch (error) { setStatus(error.message, 'error'); }
+    }
+    async function clockIn() {
+      if (!selectedEmployeeId() || !fundingSelect.value) { setStatus('Select your name and funding source.', 'error'); return; }
+      try {
+        const entry = await request('/api/clock-in', { method: 'POST', body: JSON.stringify({ employeeId: selectedEmployeeId(), fundingSourceId: fundingSelect.value, clockIn: new Date().toISOString() }) });
+        showOpenShift(entry); setStatus('Clock-in recorded.', 'success');
+      } catch (error) { setStatus(error.message, 'error'); }
+    }
+    async function clockOut() {
+      if (!selectedEmployeeId()) { setStatus('Select your name first.', 'error'); return; }
+      try {
+        await request('/api/clock-out', { method: 'POST', body: JSON.stringify({ employeeId: selectedEmployeeId(), clockOut: new Date().toISOString() }) });
+        showOpenShift(null); setStatus('Clock-out recorded.', 'success');
+      } catch (error) { setStatus(error.message, 'error'); }
+    }
+    saveApiButton.addEventListener('click', () => { localStorage.setItem('timesheetApiUrl', apiUrl()); setStatus('API address saved. Reloading data...', 'success'); loadLookups(); });
+    clockInButton.addEventListener('click', clockIn);
+    clockOutButton.addEventListener('click', clockOut);
+    loadLookups();
+  </script>
+</body>
+</html>
